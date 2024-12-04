@@ -432,6 +432,11 @@ plot( fit2, what = "classification" )
 ```
 
 ```{r}
+# Assuming your spatial object is named 'nyc'
+library(sf)
+
+# Export to GeoJSON format
+st_write(nyc, "nyc_data.geojson", driver = "GeoJSON")
 
 ```
 
