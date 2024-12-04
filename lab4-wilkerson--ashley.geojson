@@ -1,0 +1,442 @@
+---
+title: "lab4"
+author: "Ashley Wilkerson"
+date: "2024-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r }
+library( geojsonio )   # read shapefiles
+library( sp )          # work with shapefiles
+library( sf )          # work with shapefiles - simple features format
+library( mclust )      # cluster analysis 
+library( tmap )        # theme maps
+library( ggplot2 )     # graphing 
+library( ggthemes )
+library( dplyr )
+library( pander )
+library(tidycensus)
+library(tigris)
+library(cartogram)
+```
+
+
+```{r }
+census_api_key("0765edf09e6abf32a5af72fafd38dd94374a38c4")
+```
+
+
+```{r}
+crosswalk <- read.csv( "https://raw.githubusercontent.com/DS4PS/cpp-529-master/master/data/cbsatocountycrosswalk.csv",  stringsAsFactors=F, colClasses="character" )
+```
+
+```{r}
+
+grep( "^NEW YORK", crosswalk$msaname, value=TRUE )
+```
+
+```{r}
+these.msp <- crosswalk$msaname == "NEW YORK"
+these.fips <- crosswalk$fipscounty[ these.msp ]
+these.fips <- na.omit( these.fips )
+```
+
+```{r}
+these.msp <- crosswalk$msaname == "NEW YORK"
+these.fips <- crosswalk$fipscounty[ these.msp ]
+these.fips <- na.omit( these.fips )
+
+head( these.fips ) %>% pander()
+```
+
+
+```{r}
+state.fips <- substr( these.fips, 1, 2 )
+county.fips <- substr( these.fips, 3, 5 )
+
+cbind( these.fips, state.fips, county.fips ) %>% pander()
+```
+
+```{r}
+valid_fips <- county.fips[state.fips == "36"]
+valid_fips <- valid_fips[valid_fips != "990"]
+
+msp.pop1 <- get_acs(
+  geography = "tract",
+  variables = "B01003_001",  # Total population
+  state = "36",              # New York State FIPS code
+  county = county.fips[state.fips == "36"],  # Filter counties within New York State
+  geometry = TRUE             
+) %>% 
+  select(GEOID, estimate) %>%  
+  rename(POP = estimate)       # Rename estimate column to POP
+
+```
+
+
+```{r}
+library(sf)
+library(dplyr)
+
+# Load data from URL
+URL <- "https://github.com/DS4PS/cpp-529-master/raw/master/data/ltdb_std_2010_sample.rds"
+census.dat <- readRDS(gzcon(url(URL)))
+
+# Merge spatial data (msp.pop) with census data
+msp <- msp.pop1 %>%
+  left_join(census.dat, by = c("GEOID" = "tractid"))
+
+# Remove empty polygons
+msp <- msp[!st_is_empty(msp), ]
+
+
+```
+
+
+```{r}
+plot( msp.pop1 )
+```
+
+
+```{r}
+dd.URL <- "https://raw.githubusercontent.com/DS4PS/cpp-529-master/master/data/data-dictionary.csv"
+data.dictionary <- read.csv( dd.URL, stringsAsFactors=F ) 
+data.dictionary %>% pander()
+```
+
+
+
+
+```{r}
+# project map and remove empty tracts
+msp <- st_transform( msp, CRS("+init=epsg:3395"))
+msp <- msp[ msp$POP != 0 & (! is.na( msp$POP )) , ]
+
+# convert census tract polygons to dorling cartogram
+# no idea why k=0.03 works, but it does - default is k=5
+msp$pop.w <- msp$POP / 9000 # max(msp.sp$POP)   # standardizes it to max of 1.5
+msp_dorling <- cartogram_dorling( x=msp, weight="pop.w", k=0.05 )
+plot( msp_dorling )
+```
+
+```{r}
+library(tmap)
+
+# Ensure interactive or static mode as needed
+tmap_mode("plot")  # or "view" for interactive maps
+
+# Plot the Dorling cartogram with color based on "hinc12"
+tm_shape(msp_dorling) + 
+  tm_polygons(col = "hinc12", n = 7, style = "quantile", palette = "Spectral") +
+  tm_layout(title = "Dorling Cartogram", title.position = c("right", "top"))
+
+```
+
+
+
+
+```{r}
+bb <- st_bbox( c( xmin =  -10451823, xmax = -10324525, 
+                  ymax = 5639769, ymin = 5491665 ), 
+               crs = st_crs("+init=epsg:3395"))
+
+tm_shape(msp_dorling, bbox = bb) + 
+  tm_polygons(col = "hinc12", n = 10, style = "quantile", palette = "Spectral") +
+  tm_layout(title = "Dorling Cartogram", title.position = c("right", "top"))
+
+```
+
+
+```{r}
+keep.these <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+"phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+"pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+"pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+"p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+d1 <- st_drop_geometry(msp_dorling)
+d2 <- select( d1, keep.these )
+d3 <- apply( d2, 2, scale )
+head( d3[,1:6] ) %>% pander()
+
+
+```
+
+```{r}
+keep.these <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+"phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+"pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+"pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+"p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+d2 <- select( d1, keep.these )
+d3 <- apply( d2, 2, scale )
+
+head( d3[,1:6] ) %>% pander()
+```
+
+
+```{r}
+library(dplyr)
+library(sf)
+library(mclust)
+library(pander)
+
+# Define columns to keep
+keep.these <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+                "phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+                "pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+                "pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+                "p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+
+d1 <- st_drop_geometry(msp_dorling)
+d2 <- select(d1, all_of(keep.these))
+
+rows_to_keep <- complete.cases(d2)
+
+d3 <- apply(d2[rows_to_keep, ], 2, scale)
+
+
+msp_dorling <- msp_dorling[rows_to_keep, ]
+
+set.seed(1234)
+fit <- Mclust(d3)
+msp_dorling$cluster <- as.factor(fit$classification)
+
+summary(fit)
+
+```
+
+```{r}
+plot( fit, what = "classification" )
+```
+
+
+```{r}
+# Define the columns to keep
+keep.these <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+                "phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+                "pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+                "pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+                "p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+
+d1 <- st_drop_geometry(msp_dorling)
+d2 <- select(d1, all_of(keep.these))
+
+rows_to_keep <- complete.cases(d2)
+
+d2 <- d2[rows_to_keep, ]
+msp_dorling <- msp_dorling[rows_to_keep, ]
+
+```
+
+```{r}
+# Convert each column in d2 to percentiles
+df.pct <- sapply(d2, function(x) ntile(x, 100))
+d4 <- as.data.frame(df.pct)
+
+# Run the Mclust model
+library(mclust)
+set.seed(1234)
+fit <- Mclust(d4)
+
+# Add the cluster assignments
+d4$cluster <- as.factor(paste0("GROUP-", fit$classification))
+
+```
+
+
+
+
+```{r}
+library(dplyr)
+
+# Convert columns in d2 to percentiles
+df.pct <- sapply(d2, function(x) ntile(x, 100))
+d4 <- as.data.frame(df.pct)
+d4$cluster <- as.factor(paste0("GROUP-", fit$classification))
+
+# Calculate mean percentiles for each cluster
+stats <- d4 %>%
+  group_by(cluster) %>%
+  summarise(across(everything(), mean))
+
+# Transpose the result for plotting
+num.groups <- length(unique(fit$classification))
+t <- data.frame(t(stats), stringsAsFactors = FALSE)
+names(t) <- paste0("GROUP.", 1:num.groups)
+t <- t[-1, ]
+
+# Plot percentile distribution for each group
+for (i in 1:num.groups) {
+  z <- as.numeric(t[, i])
+  plot(rep(1, 30), 1:30, bty = "n", xlim = c(-75, 100),
+       type = "n", xaxt = "n", yaxt = "n",
+       xlab = "Percentile", ylab = "",
+       main = paste("GROUP", i))
+  abline(v = seq(0, 100, 25), lty = 3, lwd = 1.5, col = "gray90")
+  segments(y0 = 1:30, x0 = 0, x1 = 100, col = "gray70", lwd = 2)
+  
+  # Ensure the labels are correct for each variable
+  text(-0.2, 1:30, labels = data.dictionary$VARIABLE[-1], cex = 0.85, pos = 2)
+  
+  points(z, 1:30, pch = 19, col = "firebrick", cex = 1.5)
+  axis(side = 1, at = c(0, 50, 100), col.axis = "gray", col = "gray")
+}
+
+```
+
+
+```{r}
+summary( d2[ , 1:3 ] )
+```
+
+```{r}
+library(dplyr)
+library(corrplot)
+
+# Ensure `d3` is a data frame
+d3 <- as.data.frame(d3)
+
+# Select specified columns
+df.dim1 <- select(d3, pown12, pmulti12, p10yrs12, pwds12, pfhh12)
+
+# Compute correlation matrix and plot
+corrplot(cor(df.dim1, use = "complete.obs"), 
+         order = "hclust", tl.col = 'black', tl.cex = 0.75)
+```
+
+```{r}
+# flip the signs 
+df.dim1$pmulti12  <-  - df.dim1$pmulti12
+df.dim1$p10yrs12  <-  - df.dim1$p10yrs12
+df.dim1$pwds12    <-  - df.dim1$pwds12
+df.dim1$pfhh12    <-  - df.dim1$pfhh12
+
+corrplot( cor(df.dim1, use="complete.obs"), 
+          order = "hclust", tl.col='black', tl.cex=.75 ) 
+```
+
+```{r}
+df.dim2 <- d3[ c("pnhwht12", "pnhblk12", "phisp12", "pfb12", "polang12") ]
+
+# Check direction
+# Need to flip percent white 
+
+corrplot( cor(df.dim2, use="complete.obs"), 
+          order = "hclust", tl.col='black', tl.cex=.75 ) 
+```
+
+```{r}
+df.dim3 <- select( d3, pcol12, phs12, pprof12, hinc12, mhmval12 )
+
+# Check direction
+# Need to flip high school graduation rates 
+
+corrplot( cor(df.dim3, use="complete.obs"), 
+          order = "hclust", tl.col='black', tl.cex=.75 ) 
+```
+
+```{r}
+dim1 <- d3$pown12 - d3$pmulti12 - d3$p10yrs12 - d3$pwds12 - d3$pfhh12
+dim2 <- - d3$pnhwht12 + d3$pnhblk12 + d3$phisp12 + d3$pfb12 + d3$polang12
+dim3 <- d3$pcol12 - d3$phs12 + d3$pprof12 + d3$hinc12 + d3$mhmval12
+
+df.nhood.metrics <- data.frame( dim1, dim2, dim3 )
+summary( df.nhood.metrics )
+```
+
+
+```{r}
+fit2 <- Mclust( df.nhood.metrics )
+summary( fit2 )
+```
+
+
+
+
+```{r}
+# Full model using 30 census variables
+use.these <- c("pnhwht12", "pnhblk12", "phisp12", "pntv12", "pfb12", "polang12", 
+               "phs12", "pcol12", "punemp12", "pflabf12", "pprof12", "pmanuf12", 
+               "pvet12", "psemp12", "hinc12", "incpc12", "ppov12", "pown12", 
+               "pvac12", "pmulti12", "mrent12", "mhmval12", "p30old12", "p10yrs12", 
+               "p18und12", "p60up12", "p75up12", "pmar12", "pwds12", "pfhh12")
+
+# Data dictionary for Model 1
+dd.cluster1 <- data.dictionary[data.dictionary$LABEL %in% use.these,]
+
+# Model 2 using three indices
+index_vars <- c("dim1", "dim2", "dim3")
+LABEL <- c("dim1", "dim2", "dim3")
+VARIABLE <- c("Neighborhood transitivity", "Neighborhood diversity", "Human capital")
+dd.cluster2 <- data.frame(LABEL, VARIABLE)
+
+# Model 3 with a selected subset of three census variables from the full model
+use.these_3 <- c("pnhwht12", "pnhblk12", "phisp12")  # Example variables: replace as needed
+dd.cluster3 <- data.dictionary[data.dictionary$LABEL %in% use.these_3,]
+
+```
+
+
+
+```{r}
+fit2 <- Mclust( df.nhood.metrics )
+summary( fit2 )
+```
+
+
+```{r}
+msp_dorling$cluster2 <- as.factor( fit2$classification )
+
+# cluster with dataset of three census variables 
+d33 <- data.frame( d3$p18und12, d3$pflabf12, d3$hinc12 )
+fit3 <- Mclust( d33 )
+summary( fit3 )
+```
+
+```{r}
+msp_dorling$cluster3 <- as.factor( fit3$classification )
+
+
+
+tmap_mode("plot")
+tmap_style("cobalt")
+
+tm1 <- 
+tm_shape( msp_dorling ) + 
+  tm_polygons( col="cluster", palette="Accent"  )
+
+tm2 <- 
+tm_shape( msp_dorling ) + 
+  tm_polygons( col="cluster2", palette="Accent"  )
+
+tm3 <- 
+tm_shape( msp_dorling ) + 
+  tm_polygons( col="cluster3", palette="Accent"  )
+
+
+tmap_arrange( tm1, tm2, tm3 )
+```
+
+```{r}
+plot( fit2, what = "classification" )
+
+```
+
+```{r}
+# Assuming your spatial object is named 'nyc'
+library(sf)
+
+# Export to GeoJSON format
+st_write(nyc, "nyc_data.geojson", driver = "GeoJSON")
+
+```
+
